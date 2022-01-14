@@ -27,7 +27,7 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.*/
 
 
 // Get JSON data
-treeJSON = d3.json("flare.json", function(error, treeData) {
+treeJSON = d3.json("sample.json", function(error, treeData) {
 
     // Calculate total nodes, max label length
     var totalNodes = 0;
@@ -413,6 +413,16 @@ treeJSON = d3.json("flare.json", function(error, treeData) {
             })
             .style("fill-opacity", 0);
 
+        // Quick hack for adding link of the game, on the node 
+        nodeEnter.append("svg:a")
+            .attr("xlink:href", function(d){return d.link;})  // <-- reading the new "url" property
+            .attr("target", "_blank")
+            .append("svg:rect")
+              .attr("x", -4)
+              .attr("y", -4 )
+              .attr("height", 8)
+              .attr("width", 8)
+              .style("opacity", 0)
 
         // Update the text to reflect whether node has children or not.
         node.select('text')
@@ -512,6 +522,7 @@ treeJSON = d3.json("flare.json", function(error, treeData) {
     root = treeData;
     root.x0 = viewerHeight / 2;
     root.y0 = 0;
+    root.children.forEach(collapse);
 
     // Layout the tree initially and center on the root node.
     update(root);

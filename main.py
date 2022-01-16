@@ -1,128 +1,190 @@
-import json, requests
-import io, chess.pgn
+import io
+import requests
+import json
+
+import chess
+import chess.pgn as PGN
 
 from tqdm import tqdm
 from time import sleep
 
-
+# CONST
+USERNAME = 'kekavigi1'
 PLAY_AS = 'white'
-USER_NAME = 'kekavigi1'
-CHESS_RULES = 'chess'         
-TIME_CLASS = 'rapid'  # daily, rapid, blitz, bullet
-#TIME_CONTROL
-IS_RATED = True 
-
-ARCHIVES_URL = f'https://api.chess.com/pub/player/{USER_NAME}/games/archives'
+CHESS_RULES = 'chess'
+TIME_CLASS = 'rapid'
+IS_RATED = True
+TIME_CONTROL = None
+ARCHIVES_URL = f'https://api.chess.com/pub/player/{USERNAME}/games/archives'
 
 
-## for extracting data from parsed JSON
-def extract_dict(game):
-    if (game[PLAY_AS]['username'] != USER_NAME
-            or game['rules'] != CHESS_RULES
-            or game['rated'] != IS_RATED
-            or game['time_class'] != TIME_CLASS):
-        return None
-    
-    # parse PGN string
-    pgn_ = io.StringIO(game['pgn'])
-    pgn_ = chess.pgn.read_game(pgn_)
+def extract(game):
+    '''Extract relevant informations from JSON.'''
 
-    # extract move
-    moves = repr(pgn_.mainline())
-    moves = moves.split('(')[1].split(')')[-2].split()
+    pgn = PGN.read_game(io.StringIO(game['pgn']))
+
+    opening = pgn\
+        .headers['ECOUrl']\
+        .split('https://www.chess.com/openings/')[-1]\
+        .replace('-', ' ')
+
+    moves = repr(pgn.mainline())\
+        .split('(')[1]\
+        .split(')')[-2]\
+        .split()
     moves = ['Start'] + [move for move in moves if '.' not in move]
-    
-    # find opening name
-    opening = pgn_.headers['ECOUrl']
-    opening = opening.split('https://www.chess.com/openings/')[-1]
-    opening = opening.replace('-', ' ')
-    
-    # include link to the game
-    link = pgn_.headers['Link']
-    
-    # find result: this is simple, but isn't accurate
-    result = game[PLAY_AS]['result'] == 'win'
-    
-    return {
+
+    is_play_as_white = pgn.headers['White'] == USERNAME
+
+    if is_play_as_white:
+        if pgn.headers['Result'] == '1-0':
+            result = 'W'
+        elif pgn.headers['Result'] == '0-1':
+            result = 'L'
+        else:
+            result = 'D'
+    else:  # USERNAME as Black
+        if pgn.headers['Result'] == '1-0':
+            result = 'L'
+        elif pgn.headers['Result'] == '0-1':
+            result = 'W'
+        else:
+            result = 'D'
+
+    extracted = {
+        'url': game['url'],
+        'time_control': game['time_control'],
+        'time_class': game['time_class'],
+        'game_rules': game['rules'],
+        'opening_name': opening,
         'moves': moves,
-        'opening': opening,
-        'link': link,
-        'result': result}
+        'result': result,
+        'play_as': 'white' if is_play_as_white else 'black'
+    }
+
+    return extracted
 
 
-# for creating Trie in-place
-def extend(trie, moves, info):
-    now = moves[0]
+def extend(trie, game_data, nth=0):
 
     # add new node
     if 'name' not in trie:
-        trie['name'] = now
+        trie['name'] = game_data['moves'][nth]
+        trie['fen'] = game_data['moves'][1:nth+1]
         trie['children'] = []
+
+        # game_data['result']
         trie['win'] = 0
-        trie['total'] = 0
-        trie['opening'] = info['opening']
-        trie['link'] = info['link']
-    
+        trie['draw'] = 0
+        trie['lose'] = 0
+
+        # another info that maybe deleted later
+        trie['url'] = game_data['url']
+        trie['opening_name'] = game_data['opening_name']
+
     # update data
-    trie['win'] += info['result']
-    trie['total'] += 1
-    
+    if game_data['result'] == 'W':
+        trie['win'] += 1
+    elif game_data['result'] == 'D':
+        trie['draw'] += 1
+    else:
+        trie['lose'] += 1
+
     # if that was last element
-    if len(moves)==1:
+    if nth+1 == len(game_data['moves']):
         return trie
-    
+
     # extend Trie
     for e, child in enumerate(trie['children']):
-        if child['name'] == moves[1]:
+        if child['name'] == game_data['moves'][nth+1]:
             # pass responsibility to the child
-            trie['children'][e] = extend(trie['children'][e], moves[1:], info)
+            trie['children'][e] = extend(trie['children'][e], game_data, nth+1)
             break
     # make new child
-    else: trie['children'].append(extend({}, moves[1:], info))
+    else:
+        trie['children'].append(extend({},  game_data, nth+1))
     return trie
 
 
-# trim Trie in-place
 def trim(trie, to_cut=False):
+    '''Trim unused branch and clean all node'''
+
+    # create FEN
+    if isinstance(trie['fen'], list):
+        board = chess.Board()
+        for move in trie['fen']:
+            board.push_san(move)
+
+        filename = 'assets/' + board.fen()\
+            .replace('/', '-')\
+            .replace(' ', '-')+'.svg'
+
+        with open(filename, 'w') as f:
+            f.write(chess.svg.board(board))
+
+        trie['fen'] = filename
+
     if to_cut:
+        # this is leaf
         del trie['children']
         return trie
-    
+
     for e, child in enumerate(trie['children']):
-        z = trie['children'][e]
+        # this is branch
 
         # trim if there is only 1 game
-        trie['children'][e] = trim(z, z['total']==1)
-        
+        z = trie['children'][e]
+        total_game = z['win'] + z['draw'] + z['lose']
+        trie['children'][e] = trim(z, total_game == 1)
+
         # cleaning unused data
-        try: del trie['opening'], trie['link']
-        except: pass
+        try:
+            del trie['opening_name'],
+            del trie['url']
+        except:
+            pass
 
     return trie
 
 
 def main():
-    trie = {}
-
     # get all archived data (by month)
     raw = requests.get(ARCHIVES_URL).text
     archives = json.loads(raw)['archives']
 
+    trie = {}
+
     for month in tqdm(archives):
-        raw = requests.get(month).text
+        # download monthly archive
+        raw = ''
+        sleep_counter = 1
+
+        while not raw:
+            # respect the server
+            sleep(sleep_counter)
+            sleep_counter *= 2
+            raw = requests.get(month).text
+
+        # parse
         this_month = json.loads(raw)['games']
-        
+
         # extend trie
         for game in this_month:
-            z = extract_dict(game)
-            if not z: continue
-            extend(trie, z['moves'], z)
-        
-        # respect the server
-        sleep(1)
-    
-    trie = trim(trie)
-    
+            g = extract(game)
+
+            # sanity check
+            if g['game_rules'] != CHESS_RULES:
+                continue
+            if g['time_class'] != TIME_CLASS:
+                continue
+            if g['play_as'] != PLAY_AS:
+                continue
+
+            extend(trie, g)
+
+    # trimmed
+    trim(trie)
+
     # saving file
     with open("sample.json", "w") as f:
         f.write(json.dumps(trie))

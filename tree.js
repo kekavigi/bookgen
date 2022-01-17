@@ -402,7 +402,7 @@ treeJSON = d3.json("sample.json", function(error, treeData) {
             .attr("text-anchor", "middle")
             .attr('class', 'nodeText')
             .text(function(d) {
-                return d.name + "(WDL " + d.win + '/' + d.draw + '/' + d.lose + ")";
+                return d.name + " (WDL " + d.win + '/' + d.draw + '/' + d.lose + ")";
             })
             .style("fill-opacity", 0);
 
